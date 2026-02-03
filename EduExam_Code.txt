@@ -1,0 +1,1965 @@
+================================================================================
+                         EDUEXAM - COMPLETE CODE COLLECTION
+================================================================================
+
+This file contains all code related to the EduExam feature from the EduTrack2628 project.
+Use this as reference to create a separate site for EduExam.
+
+Generated on: February 3, 2026
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+1. MAIN EXAM PRACTICE PAGE COMPONENT
+2. DATA - COURSES & QUESTIONS
+3. SHARED COMPONENTS
+   - SubjectSelector Component
+   - RichTextEditor Component
+   - RichTextEditor CSS Styles
+   - TableDialog Component
+   - AlertDialog Component
+4. DATABASE SCHEMA (Supabase Migration)
+5. DATABASE TYPES (TypeScript)
+6. ACTIVITY TRACKER HOOK (Exam-related parts)
+7. APP ROUTER CONFIGURATION
+8. HOME PAGE REFERENCE (Feature Card)
+
+================================================================================
+1. MAIN EXAM PRACTICE PAGE COMPONENT
+================================================================================
+File: src/features/exam-practice/components/ExamPracticePage.tsx
+--------------------------------------------------------------------------------
+
+import { useState, useEffect } from "react";
+import { motion } from "framer-motion";
+import { ArrowLeft, Timer, Save, Download, Eye, Flag, Maximize2, LogOut } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import Navbar from "@/shared/layout/Navbar";
+import RichTextEditor from "@/features/contribute/components/RichTextEditor";
+import SubjectSelector from "@/features/sgpa/components/SubjectSelector";
+import { departments } from "@/features/syllabus/data/courses";
+import type { Question } from "@/features/syllabus/data/courses";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
+
+type QuestionStatus = "unattempted" | "answered" | "marked";
+const EXAM_DURATION = 90 * 60; // 90 minutes in seconds
+
+export default function ExamPractice() {
+  const navigate = useNavigate();
+
+  // Load saved progress from localStorage
+  const [savedProgress] = useState(() => {
+    const saved = localStorage.getItem('examProgress');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  // Subject selection states
+  const [selectedDepartment, setSelectedDepartment] = useState<string | null>(
+    savedProgress?.selectedDepartment || null
+  );
+  const [selectedSubject, setSelectedSubject] = useState<string | null>(
+    savedProgress?.selectedSubject || null
+  );
+  const [showSubjectSelector, setShowSubjectSelector] = useState(true);
+  
+  // Exam state
+  const [examQuestions, setExamQuestions] = useState<Question[]>(() => {
+    if (savedProgress?.examQuestions) {
+      return savedProgress.examQuestions;
+    }
+    return [];
+  });
+
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(savedProgress?.currentQuestionIndex || 0);
+  const [answers, setAnswers] = useState<Record<string, string>>(savedProgress?.answers || {});
+  const [questionStatus, setQuestionStatus] = useState<Record<string, QuestionStatus>>(savedProgress?.questionStatus || {});
+  const [hasStarted, setHasStarted] = useState(savedProgress ? true : false);
+  const [timeElapsed, setTimeElapsed] = useState(savedProgress?.timeElapsed || 0);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const [showStartDialog, setShowStartDialog] = useState(!savedProgress);
+  const [showEndDialog, setShowEndDialog] = useState(false);
+
+  // Handler for subject selection
+  const handleSubjectSelect = (departmentId: string, subjectId: string) => {
+    setSelectedDepartment(departmentId);
+    setSelectedSubject(subjectId);
+    const department = departments.find(d => d.id === departmentId);
+    const subject = department?.subjects.find(s => s.id === subjectId);
+    
+    if (subject) {
+      // Select 6 random questions from the subject
+      const shuffled = [...subject.questions].sort(() => Math.random() - 0.5);
+      const selected = shuffled.slice(0, 6);
+      setExamQuestions(selected);
+      setShowSubjectSelector(false);
+
+      // If there's saved progress, don't show the start dialog again
+      if (!savedProgress) {
+        setShowStartDialog(true);
+      } else {
+        setHasStarted(true);
+      }
+    }
+  };
+
+  // Function to restart the exam
+  const restartExam = () => {
+    localStorage.removeItem('examProgress');
+    window.location.reload();
+  };
+
+  // Function to handle exam end
+  const endExam = () => {
+    saveNow(); // Save final state
+    localStorage.removeItem('examProgress'); // Clear progress
+    navigate('/'); // Return to home
+  };
+
+  const currentQuestion = examQuestions[currentQuestionIndex];
+
+  // Timer effect with auto-save
+  useEffect(() => {
+    // Clear any existing progress when component mounts if there's no saved progress
+    if (!savedProgress) {
+      localStorage.removeItem('examProgress');
+      setTimeElapsed(0);
+    }
+  }, [savedProgress]);
+
+  useEffect(() => {
+    if (!hasStarted || timeElapsed >= EXAM_DURATION) return;
+
+    const interval = setInterval(() => {
+      setTimeElapsed((prev) => {
+        const newTime = prev + 1;
+        // Auto-save every minute
+        if (newTime % 60 === 0) {
+          saveNow();
+        }
+        
+        // Time's up handling
+        if (newTime >= EXAM_DURATION) {
+          saveNow(); // Final save
+          setShowEndDialog(true); // Show end dialog
+          return EXAM_DURATION;
+        }
+        return newTime;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [hasStarted, timeElapsed]);
+
+  const updateAnswer = (questionId: string, content: string) => {
+    // Only update if content has changed
+    if (answers[questionId] !== content) {
+      setAnswers((prev) => ({ ...prev, [questionId]: content }));
+      if (!questionStatus[questionId]) {
+        setQuestionStatus((prev) => ({ ...prev, [questionId]: "answered" }));
+      }
+    }
+  };
+
+  const markForReview = () => {
+    setQuestionStatus((prev) => ({
+      ...prev,
+      [currentQuestion.id]: "marked",
+    }));
+  };
+
+  const saveNow = () => {
+    // Save to localStorage
+    localStorage.setItem('examProgress', JSON.stringify({
+      answers,
+      questionStatus,
+      timeElapsed,
+      examQuestions,
+      currentQuestionIndex,
+      selectedDepartment,
+      selectedSubject
+    }));
+  };
+
+  const downloadAttempt = () => {
+    const blob = new Blob([JSON.stringify({ examQuestions, answers, timeElapsed }, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `exam-attempt-${new Date().toISOString()}.json`;
+    a.click();
+  };
+
+  const getStatusColor = (status: QuestionStatus | undefined) => {
+    switch (status) {
+      case "answered":
+        return "bg-success/20 border-success";
+      case "marked":
+        return "bg-warning/20 border-warning";
+      default:
+        return "bg-muted/20 border-muted";
+    }
+  };
+
+  // Calculate time remaining
+  const timeRemaining = EXAM_DURATION - timeElapsed;
+  const minutes = Math.floor(timeRemaining / 60);
+  const seconds = timeRemaining % 60;
+
+  // Reset progress if accessing directly
+  useEffect(() => {
+    if (!selectedSubject && !savedProgress) {
+      localStorage.removeItem('examProgress');
+      setTimeElapsed(0);
+    }
+  }, [selectedSubject, savedProgress]);
+
+  // If subject is not selected and there's no saved progress, show subject selector
+  if (showSubjectSelector) {
+    return (
+      <div className="min-h-screen">
+        <Navbar />
+        <div className="container mx-auto px-3 sm:px-4 py-6 sm:py-8">
+          <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
+            <Link to="/" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline mb-4 sm:mb-6">
+              <ArrowLeft className="w-3.5 h-3.5" />
+              Back to Home
+            </Link>
+          </motion.div>
+          <SubjectSelector departments={departments} onSelect={handleSubjectSelect} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen">
+      {!isFullScreen && <Navbar />}
+
+      <div className="container mx-auto px-4 py-6 sm:py-8">
+        {!isFullScreen && (
+          <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
+            <Link to="/" className="inline-flex items-center gap-2 text-primary hover:underline mb-6">
+              <ArrowLeft className="w-4 h-4" />
+              Back to Home
+            </Link>
+          </motion.div>
+        )}
+
+        {/* Dialogs */}
+        <AlertDialog open={showStartDialog} onOpenChange={setShowStartDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Start Exam</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <p>Your exam will start immediately and you will have 90 minutes to complete it.</p>
+                <p>Total Questions: {examQuestions.length}</p>
+                <p>Total Marks: {examQuestions.length * 5}</p>
+                <p className="font-semibold text-warning">Make sure you are ready before starting. The timer cannot be paused once started.</p>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={() => navigate('/')}>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => {
+                setShowStartDialog(false);
+                setTimeElapsed(0); // Reset timer when starting
+                setHasStarted(true);
+              }}>Start Exam</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog open={showEndDialog} onOpenChange={setShowEndDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Exam Ended</AlertDialogTitle>
+              <AlertDialogDescription>
+                {timeElapsed >= EXAM_DURATION 
+                  ? "Time's up! Your exam has ended and all answers have been saved."
+                  : "You are about to end your exam. All your answers have been saved."}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              {timeElapsed < EXAM_DURATION && (
+                <AlertDialogCancel onClick={() => setShowEndDialog(false)}>Continue Exam</AlertDialogCancel>
+              )}
+              <AlertDialogAction onClick={endExam}>Leave Exam</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Main Exam Interface */}
+        {hasStarted && currentQuestion && (
+          <>
+            {/* Top Control Bar */}
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="glass-card p-3 sm:p-4 mb-4 sm:mb-6 flex items-center justify-between flex-wrap gap-3"
+            >
+              <div className="flex items-center gap-3">
+                <span className={`font-mono text-sm sm:text-base font-semibold ${minutes < 5 ? 'text-destructive' : 'text-muted-foreground'}`}>
+                  {minutes}:{seconds.toString().padStart(2, "0")} remaining
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <button onClick={saveNow} className="glass-button px-2.5 sm:px-3 py-1.5 flex items-center gap-1.5 text-sm">
+                    <Save className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Save Now</span>
+                  </button>
+                  <button onClick={downloadAttempt} className="glass-button px-2.5 sm:px-3 py-1.5 flex items-center gap-1.5 text-sm">
+                    <Download className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Export</span>
+                  </button>
+                  <button
+                    onClick={() => setIsFullScreen(!isFullScreen)}
+                    className="glass-button px-2.5 sm:px-3 py-1.5 flex items-center gap-1.5 text-sm"
+                  >
+                    {isFullScreen ? <Eye className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                
+                {/* Separate End Exam button with more prominence */}
+                <button
+                  onClick={() => setShowEndDialog(true)}
+                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground px-4 sm:px-5 py-1.5 rounded-md flex items-center gap-1.5 font-medium shadow-sm text-sm"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>End Exam</span>
+                </button>
+              </div>
+            </motion.div>
+
+            {/* Two Column Layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
+              {/* Left: Question Pane */}
+              <div className="lg:col-span-2">
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="glass-card p-4 sm:p-5"
+                >
+                  <div className="flex items-start justify-between mb-4 sm:mb-5">
+                    <div>
+                      <h2 className="text-lg sm:text-xl font-semibold">
+                        Question {currentQuestionIndex + 1} of {examQuestions.length}
+                      </h2>
+                      <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">Marks: {currentQuestion.marks}</p>
+                    </div>
+                    <button
+                      onClick={markForReview}
+                      className="glass-button px-2.5 py-1.5 flex items-center gap-1.5 text-warning text-sm"
+                    >
+                      <Flag className="w-3.5 h-3.5" />
+                      <span className="text-sm">Mark</span>
+                    </button>
+                  </div>
+
+                  <div className="mb-4 sm:mb-5">
+                    <p className="text-sm sm:text-base mb-3 font-medium">{currentQuestion.text}</p>
+                  </div>
+
+                  {/* Rich Text Editor */}
+                  <div>
+                    <label className="block text-xs sm:text-sm font-medium mb-1.5">Your Answer:</label>
+                    <RichTextEditor
+                      key={currentQuestion.id} // Force new editor instance for each question
+                      content={answers[currentQuestion.id] || ""}
+                      onChange={(content) => updateAnswer(currentQuestion.id, content)}
+                    />
+                    <p className="text-[11px] sm:text-xs text-muted-foreground mt-1.5">
+                      You can paste images directly into the editor (Ctrl+V / Cmd+V)
+                    </p>
+                  </div>
+
+                  {/* Navigation Buttons */}
+                  <div className="flex items-center justify-between mt-4 sm:mt-5 pt-4 sm:pt-5 border-t border-glass-border">
+                    <button
+                      onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
+                      disabled={currentQuestionIndex === 0}
+                      className="glass-button px-4 sm:px-5 py-1.5 sm:py-2 text-sm disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() =>
+                        setCurrentQuestionIndex((prev) =>
+                          Math.min(examQuestions.length - 1, prev + 1)
+                        )
+                      }
+                      disabled={currentQuestionIndex === examQuestions.length - 1}
+                      className="glass-button px-4 sm:px-5 py-1.5 sm:py-2 text-sm bg-primary/10 text-primary disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+
+              {/* Right: Question Navigation Panel */}
+              {!isFullScreen && (
+                <div className="lg:col-span-1">
+                  <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="glass-card p-3 sm:p-4 sticky top-20"
+                  >
+                    <h3 className="text-sm sm:text-base font-semibold mb-3">Question Navigator</h3>
+
+                    <div className="grid grid-cols-3 gap-1.5 mb-4">
+                      {examQuestions.map((q, idx) => (
+                        <button
+                          key={q.id}
+                          onClick={() => setCurrentQuestionIndex(idx)}
+                          className={`aspect-square rounded-md border-2 text-xs sm:text-sm font-medium spring-smooth ${
+                            idx === currentQuestionIndex
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : getStatusColor(questionStatus[q.id])
+                          }`}
+                        >
+                          {idx + 1}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="space-y-1.5 text-xs sm:text-sm">
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-3.5 h-3.5 rounded bg-success/20 border-2 border-success" />
+                        <span>Answered</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-3.5 h-3.5 rounded bg-warning/20 border-2 border-warning" />
+                        <span>Marked for Review</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-3.5 h-3.5 rounded bg-muted/20 border-2 border-muted" />
+                        <span>Unattempted</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 pt-4 border-t border-glass-border">
+                      <div className="text-xs sm:text-sm space-y-1.5">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Total Questions:</span>
+                          <span className="font-semibold">{examQuestions.length}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Total Marks:</span>
+                          <span className="font-semibold">{examQuestions.length * 5}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+2. DATA - COURSES & QUESTIONS
+================================================================================
+File: src/features/syllabus/data/courses.ts
+--------------------------------------------------------------------------------
+
+export interface Question {
+  id: string;
+  text: string;
+  marks: number;
+}
+
+export interface Subject {
+  id: string;
+  name: string;
+  questions: Question[];
+}
+
+export interface Department {
+  id: string;
+  name: string;
+  subjects: Subject[];
+}
+
+export const departments: Department[] = [
+  {
+    id: "engineering",
+    name: "Department of Engineering",
+    subjects: [
+      {
+        id: "computational-mathematics",
+        name: "Computational Mathematics – I (CMAT)",
+        questions: [
+          { id: "cmat-1", text: "Define computational mathematics and explain its importance in engineering.", marks: 5 },
+          { id: "cmat-2", text: "What are algebraic and transcendental equations? Give examples.", marks: 5 },
+          { id: "cmat-3", text: "Explain the Bisection Method for finding roots of equations.", marks: 5 },
+          { id: "cmat-4", text: "What is the Newton-Raphson Method? Write its formula and discuss its convergence.", marks: 5 },
+          { id: "cmat-5", text: "Compare Bisection and Regula Falsi methods.", marks: 5 },
+          { id: "cmat-6", text: "What are the limitations of iterative methods?", marks: 5 },
+          { id: "cmat-7", text: "Explain the concept of error and its types in numerical computation.", marks: 5 },
+          { id: "cmat-8", text: "What is the difference between absolute error and relative error?", marks: 5 },
+          { id: "cmat-9", text: "Define interpolation and explain its applications.", marks: 5 },
+          { id: "cmat-10", text: "Derive Newton's Forward Interpolation Formula.", marks: 5 },
+          { id: "cmat-11", text: "What is Newton's Backward Interpolation Formula?", marks: 5 },
+          { id: "cmat-12", text: "Explain Lagrange's Interpolation Method with an example.", marks: 5 },
+          { id: "cmat-13", text: "Define numerical differentiation. How is it applied in computational mathematics?", marks: 5 },
+          { id: "cmat-14", text: "Explain how finite differences are used in differentiation.", marks: 5 },
+          { id: "cmat-15", text: "What is numerical integration? Give examples of real-world applications.", marks: 5 },
+          { id: "cmat-16", text: "Derive Trapezoidal Rule for numerical integration.", marks: 5 },
+          { id: "cmat-17", text: "Explain Simpson's 1/3rd Rule and 3/8th Rule.", marks: 5 },
+          { id: "cmat-18", text: "What is the significance of order of convergence in numerical methods?", marks: 5 },
+          { id: "cmat-19", text: "Define eigenvalues and eigenvectors and explain their computational importance.", marks: 5 },
+          { id: "cmat-20", text: "What are matrix factorizations? Explain LU decomposition.", marks: 5 },
+          { id: "cmat-21", text: "Define Gauss Elimination Method and its steps.", marks: 5 },
+          { id: "cmat-22", text: "What is Gauss-Seidel Iteration Method?", marks: 5 },
+          { id: "cmat-23", text: "Explain how linear equations are solved using matrices.", marks: 5 },
+          { id: "cmat-24", text: "Define least squares method and its use in data fitting.", marks: 5 },
+          { id: "cmat-25", text: "What is numerical solution of ordinary differential equations?", marks: 5 },
+          { id: "cmat-26", text: "Explain Euler's Method for solving ODEs.", marks: 5 },
+          { id: "cmat-27", text: "What is the Runge-Kutta Method? How does it improve accuracy?", marks: 5 },
+          { id: "cmat-28", text: "Discuss applications of computational mathematics in engineering design.", marks: 5 },
+          { id: "cmat-29", text: "How does round-off error affect numerical computation?", marks: 5 },
+          { id: "cmat-30", text: "What are the advantages and limitations of numerical methods compared to analytical methods?", marks: 5 }
+        ]
+      },
+      {
+        id: "physics-for-engineers",
+        name: "Physics for Engineers (PHY)",
+        questions: [
+          { id: "phy-1", text: "Define scalar and vector quantities with examples.", marks: 5 },
+          { id: "phy-2", text: "Explain the concept of motion in one dimension.", marks: 5 },
+          { id: "phy-3", text: "What is Newton's Second Law of Motion?", marks: 5 },
+          { id: "phy-4", text: "Define work, power, and energy.", marks: 5 },
+          { id: "phy-5", text: "Explain the principle of conservation of energy.", marks: 5 },
+          { id: "phy-6", text: "What are elastic and inelastic collisions?", marks: 5 },
+          { id: "phy-7", text: "Define simple harmonic motion and give examples.", marks: 5 },
+          { id: "phy-8", text: "Explain the concept of resonance.", marks: 5 },
+          { id: "phy-9", text: "What are longitudinal and transverse waves?", marks: 5 },
+          { id: "phy-10", text: "Define interference and diffraction of light.", marks: 5 },
+          { id: "phy-11", text: "Explain the working principle of a laser.", marks: 5 },
+          { id: "phy-12", text: "What is the difference between spontaneous and stimulated emission?", marks: 5 },
+          { id: "phy-13", text: "Describe the concept of polarization of light.", marks: 5 },
+          { id: "phy-14", text: "Explain the basics of quantum mechanics.", marks: 5 },
+          { id: "phy-15", text: "What are energy bands in solids?", marks: 5 },
+          { id: "phy-16", text: "Define semiconductors and their types.", marks: 5 },
+          { id: "phy-17", text: "Explain the Hall effect and its significance.", marks: 5 },
+          { id: "phy-18", text: "What is the concept of superconductivity?", marks: 5 },
+          { id: "phy-19", text: "Define electric potential and electric field.", marks: 5 },
+          { id: "phy-20", text: "Explain Gauss's Law and its applications.", marks: 5 },
+          { id: "phy-21", text: "Define capacitance and derive the formula for a parallel plate capacitor.", marks: 5 },
+          { id: "phy-22", text: "What are magnetic materials?", marks: 5 },
+          { id: "phy-23", text: "Explain Faraday's Law of Electromagnetic Induction.", marks: 5 },
+          { id: "phy-24", text: "Describe Lenz's Law.", marks: 5 },
+          { id: "phy-25", text: "What is the difference between AC and DC current?", marks: 5 },
+          { id: "phy-26", text: "Define impedance and reactance.", marks: 5 },
+          { id: "phy-27", text: "Explain the concept of diffraction grating.", marks: 5 },
+          { id: "phy-28", text: "What is the photoelectric effect?", marks: 5 },
+          { id: "phy-29", text: "Define refractive index and explain Snell's law.", marks: 5 },
+          { id: "phy-30", text: "Discuss applications of physics in modern engineering.", marks: 5 }
+        ]
+      },
+      {
+        id: "linux-shell-scripting",
+        name: "Linux and Shell Scripting (Linux)",
+        questions: [
+          { id: "linux-1", text: "What is Linux and how is it different from other operating systems?", marks: 5 },
+          { id: "linux-2", text: "Explain the structure of the Linux file system.", marks: 5 },
+          { id: "linux-3", text: "What is the role of the kernel in Linux?", marks: 5 },
+          { id: "linux-4", text: "Define shell and its types.", marks: 5 },
+          { id: "linux-5", text: "Explain the booting process of a Linux system.", marks: 5 },
+          { id: "linux-6", text: "What are Linux file permissions?", marks: 5 },
+          { id: "linux-7", text: "How do you change file ownership and permissions?", marks: 5 },
+          { id: "linux-8", text: "What is the difference between absolute and relative paths?", marks: 5 },
+          { id: "linux-9", text: "Explain the concept of environment variables.", marks: 5 },
+          { id: "linux-10", text: "What are common Linux commands for file management?", marks: 5 },
+          { id: "linux-11", text: "Define process and explain process management in Linux.", marks: 5 },
+          { id: "linux-12", text: "What is the difference between a process and a thread?", marks: 5 },
+          { id: "linux-13", text: "How do you view and kill processes in Linux?", marks: 5 },
+          { id: "linux-14", text: "Explain the purpose of the grep command.", marks: 5 },
+          { id: "linux-15", text: "What is the use of awk and sed commands?", marks: 5 },
+          { id: "linux-16", text: "Explain the use of pipes and redirection.", marks: 5 },
+          { id: "linux-17", text: "What is a shell script?", marks: 5 },
+          { id: "linux-18", text: "How do you create and execute a shell script?", marks: 5 },
+          { id: "linux-19", text: "What are conditional statements in shell scripting?", marks: 5 },
+          { id: "linux-20", text: "Explain the use of loops in shell scripting.", marks: 5 },
+          { id: "linux-21", text: "How are functions defined and used in shell scripts?", marks: 5 },
+          { id: "linux-22", text: "What is command substitution?", marks: 5 },
+          { id: "linux-23", text: "Explain how to handle user input in shell scripts.", marks: 5 },
+          { id: "linux-24", text: "What are positional parameters?", marks: 5 },
+          { id: "linux-25", text: "Describe error handling in shell scripts.", marks: 5 },
+          { id: "linux-26", text: "How do you automate system tasks using cron jobs?", marks: 5 },
+          { id: "linux-27", text: "What is the use of wildcards in Linux?", marks: 5 },
+          { id: "linux-28", text: "Define the concept of root privileges.", marks: 5 },
+          { id: "linux-29", text: "What is a symbolic link?", marks: 5 },
+          { id: "linux-30", text: "Discuss the advantages of shell scripting in automation.", marks: 5 }
+        ]
+      },
+      {
+        id: "problem-solving-lab",
+        name: "Problem Solving Lab - I (with C) (CPL)",
+        questions: [
+          { id: "cpl-1", text: "What is the purpose of laboratory exercises in programming?", marks: 5 },
+          { id: "cpl-2", text: "Explain the process of writing and compiling a C program.", marks: 5 },
+          { id: "cpl-3", text: "How do you test and debug a C program?", marks: 5 },
+          { id: "cpl-4", text: "What are input/output functions in C?", marks: 5 },
+          { id: "cpl-5", text: "Write the steps involved in designing a program to find factorial of a number.", marks: 5 },
+          { id: "cpl-6", text: "Explain the logic for checking prime numbers.", marks: 5 },
+          { id: "cpl-7", text: "Describe how to implement loops in lab programs.", marks: 5 },
+          { id: "cpl-8", text: "What is the role of conditional statements in problem solving?", marks: 5 },
+          { id: "cpl-9", text: "How can arrays be used in solving real-world problems?", marks: 5 },
+          { id: "cpl-10", text: "Write an algorithm to find the sum of digits of a number.", marks: 5 },
+          { id: "cpl-11", text: "Explain the concept of nested loops using a pattern program.", marks: 5 },
+          { id: "cpl-12", text: "How do you implement searching algorithms in C?", marks: 5 },
+          { id: "cpl-13", text: "Explain the logic of bubble sort.", marks: 5 },
+          { id: "cpl-14", text: "How do you reverse a string using C?", marks: 5 },
+          { id: "cpl-15", text: "Write a program logic for matrix addition.", marks: 5 },
+          { id: "cpl-16", text: "Explain 2D array representation and manipulation.", marks: 5 },
+          { id: "cpl-17", text: "What is the use of functions in programming labs?", marks: 5 },
+          { id: "cpl-18", text: "How to pass arguments to functions?", marks: 5 },
+          { id: "cpl-19", text: "Explain recursive function with example.", marks: 5 },
+          { id: "cpl-20", text: "Write logic to check palindrome using C.", marks: 5 },
+          { id: "cpl-21", text: "How do you read and write data from files in C?", marks: 5 },
+          { id: "cpl-22", text: "What are pointer applications in lab exercises?", marks: 5 },
+          { id: "cpl-23", text: "Describe how to dynamically allocate memory in a program.", marks: 5 },
+          { id: "cpl-24", text: "How do you handle user input validation?", marks: 5 },
+          { id: "cpl-25", text: "Explain step-by-step debugging of a C program.", marks: 5 },
+          { id: "cpl-26", text: "Write algorithm for finding Fibonacci series.", marks: 5 },
+          { id: "cpl-27", text: "Explain how to design modular programs in C.", marks: 5 },
+          { id: "cpl-28", text: "What are common syntax errors in C programs?", marks: 5 },
+          { id: "cpl-29", text: "How do you document and comment code effectively?", marks: 5 },
+          { id: "cpl-30", text: "What are the best practices to follow in lab programming?", marks: 5 }
+        ]
+      },
+      {
+        id: "computer-organization",
+        name: "Computer Organization (CO)",
+        questions: [
+          { id: "co-1", text: "Define computer organization and computer architecture.", marks: 5 },
+          { id: "co-2", text: "Explain the basic functional units of a computer.", marks: 5 },
+          { id: "co-3", text: "What is the role of the control unit?", marks: 5 },
+          { id: "co-4", text: "Describe the instruction cycle.", marks: 5 },
+          { id: "co-5", text: "What are addressing modes?", marks: 5 },
+          { id: "co-6", text: "Explain various types of instruction formats.", marks: 5 },
+          { id: "co-7", text: "What is a register? Explain its types.", marks: 5 },
+          { id: "co-8", text: "Define memory hierarchy.", marks: 5 },
+          { id: "co-9", text: "Explain the difference between primary and secondary memory.", marks: 5 },
+          { id: "co-10", text: "What is cache memory and how does it improve performance?", marks: 5 },
+          { id: "co-11", text: "Explain the concept of virtual memory.", marks: 5 },
+          { id: "co-12", text: "What is the difference between RISC and CISC architectures?", marks: 5 },
+          { id: "co-13", text: "Define micro-operations and their types.", marks: 5 },
+          { id: "co-14", text: "What is an ALU and what are its functions?", marks: 5 },
+          { id: "co-15", text: "Explain the working of a bus system.", marks: 5 },
+          { id: "co-16", text: "What is a pipeline in computer architecture?", marks: 5 },
+          { id: "co-17", text: "Explain the concept of instruction-level parallelism.", marks: 5 },
+          { id: "co-18", text: "Define input/output organization.", marks: 5 },
+          { id: "co-19", text: "What are interrupts and their types?", marks: 5 },
+          { id: "co-20", text: "Explain the concept of DMA (Direct Memory Access).", marks: 5 },
+          { id: "co-21", text: "Describe the working of I/O ports.", marks: 5 },
+          { id: "co-22", text: "What is a memory-mapped I/O system?", marks: 5 },
+          { id: "co-23", text: "Define stack organization and its use.", marks: 5 },
+          { id: "co-24", text: "Explain hardwired and microprogrammed control units.", marks: 5 },
+          { id: "co-25", text: "What are the different types of storage devices?", marks: 5 },
+          { id: "co-26", text: "Explain the concept of instruction pipelining.", marks: 5 },
+          { id: "co-27", text: "What is cache mapping?", marks: 5 },
+          { id: "co-28", text: "Explain the concept of addressing in CPU.", marks: 5 },
+          { id: "co-29", text: "What are the performance metrics of a computer?", marks: 5 },
+          { id: "co-30", text: "Discuss the role of computer organization in system design.", marks: 5 }
+        ]
+      },
+      {
+        id: "Computer-Networking",
+        name: "Computer Networking",
+        questions: [
+          { id: "dc-1", text: "What are the operations of TCP flow control, and what benefits does it provide?", marks: 5 },
+          { id: "dc-2", text: "Explain the function and structure of the TCP sliding window protocol.", marks: 5 },
+          { id: "dc-3", text: "How does TCP handle congestion in the network?", marks: 5 },
+          { id: "dc-4", text: "What is congestion control and how does the transport layer manage it?", marks: 5 },
+          { id: "dc-5", text: "How does TCP retransmit lost packets or acknowledgments?", marks: 5 },
+          { id: "dc-6", text: "What mechanism does TCP use to detect and recover from errors?", marks: 5 },
+          { id: "dc-7", text: "Explain how Karn/Partridge Algorithm estimates Round Trip Time (RTT).", marks: 5 },
+          { id: "dc-8", text: "How does the Jacobson/Karels Algorithm refine RTT estimation over Karn/Partridge?", marks: 5 },
+          { id: "dc-9", text: "What is fast retransmission in TCP and when is it triggered?", marks: 5 },
+          { id: "dc-10", text: "How do duplicate acknowledgments aid in fast retransmission?", marks: 5 },
+          { id: "dc-11", text: "Describe multiplexing and demultiplexing in transport layer with examples.", marks: 5 },
+          { id: "dc-12", text: "What do you mean by demultiplexing in the transport layer?", marks: 5 },
+          { id: "dc-13", text: "Describe the process and need for multiplexing with a suitable example.", marks: 5 },
+          { id: "dc-14", text: "Explain the key fields of a TCP header and their significance.", marks: 5 },
+          { id: "dc-15", text: "How do different fields in the TCP header support flow control?", marks: 5 }
+        ]
+      }
+    ]
+  },
+  {
+    id: "commerce",
+    name: "Department of Commerce",
+    subjects: [
+      {
+        id: "financial-accounting",
+        name: "Financial Accounting",
+        questions: [
+          { id: "fa-1", text: "What are the main objectives of financial accounting?", marks: 5 },
+          { id: "fa-2", text: "Explain the difference between accounting and bookkeeping.", marks: 5 },
+          { id: "fa-3", text: "What are the fundamental accounting principles?", marks: 5 },
+          { id: "fa-4", text: "Define assets, liabilities, and owner's equity.", marks: 5 },
+          { id: "fa-5", text: "What is the accounting equation and why is it important?", marks: 5 },
+          { id: "fa-6", text: "Explain the double-entry bookkeeping system.", marks: 5 },
+          { id: "fa-7", text: "What is a trial balance and why is it prepared?", marks: 5 },
+          { id: "fa-8", text: "Differentiate between capital expenditure and revenue expenditure.", marks: 5 },
+          { id: "fa-9", text: "What are adjusting entries and why are they necessary?", marks: 5 },
+          { id: "fa-10", text: "Explain the concept of depreciation and its methods.", marks: 5 },
+          { id: "fa-11", text: "What is the purpose of a balance sheet?", marks: 5 },
+          { id: "fa-12", text: "Describe the components of an income statement.", marks: 5 },
+          { id: "fa-13", text: "What is a cash flow statement and its importance?", marks: 5 },
+          { id: "fa-14", text: "Explain the concept of materiality in accounting.", marks: 5 },
+          { id: "fa-15", text: "What are the different types of financial statements?", marks: 5 }
+        ]
+      },
+      {
+        id: "management-foundation",
+        name: "Management Foundation",
+        questions: [
+          { id: "mf-1", text: "Define management and explain its importance.", marks: 5 },
+          { id: "mf-2", text: "What are the main functions of management?", marks: 5 },
+          { id: "mf-3", text: "Explain the planning process in management.", marks: 5 },
+          { id: "mf-4", text: "What is organizational structure and its types?", marks: 5 },
+          { id: "mf-5", text: "Define leadership and its different styles.", marks: 5 },
+          { id: "mf-6", text: "What is motivation and its theories?", marks: 5 },
+          { id: "mf-7", text: "Explain the decision-making process in management.", marks: 5 },
+          { id: "mf-8", text: "What is strategic management and its components?", marks: 5 },
+          { id: "mf-9", text: "Define control and its importance in management.", marks: 5 },
+          { id: "mf-10", text: "What are the principles of management by Fayol?", marks: 5 },
+          { id: "mf-11", text: "Explain the concept of MBO (Management by Objectives).", marks: 5 },
+          { id: "mf-12", text: "What is organizational behavior and its importance?", marks: 5 },
+          { id: "mf-13", text: "Define conflict management and its resolution strategies.", marks: 5 },
+          { id: "mf-14", text: "What is change management and its process?", marks: 5 },
+          { id: "mf-15", text: "Explain corporate social responsibility in management.", marks: 5 }
+        ]
+      }
+    ]
+  }
+];
+
+
+================================================================================
+3. SHARED COMPONENTS
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 SubjectSelector Component
+--------------------------------------------------------------------------------
+File: src/features/sgpa/components/SubjectSelector.tsx
+--------------------------------------------------------------------------------
+
+import { motion } from "framer-motion";
+import { Department } from "@/features/syllabus/data/courses";
+import { memo } from "react";
+
+interface SubjectSelectorProps {
+  departments: Department[];
+  onSelect: (departmentId: string, subjectId: string) => void;
+}
+
+const SubjectSelector = memo(function SubjectSelector({ departments, onSelect }: SubjectSelectorProps) {
+  return (
+    <div className="container mx-auto px-3 sm:px-4 py-6">
+      {departments.map((department) => (
+        <motion.div
+          key={department.id}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6"
+        >
+          <h2 className="text-xl sm:text-2xl font-bold mb-3 gradient-text">{department.name}</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {department.subjects.map((subject) => (
+              <motion.button
+                key={subject.id}
+                onClick={() => onSelect(department.id, subject.id)}
+                className="glass-card p-4 sm:p-5 text-left hover:scale-102 transition-transform"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                <h3 className="text-base sm:text-lg font-semibold mb-1">{subject.name}</h3>
+                <p className="text-xs sm:text-sm text-muted-foreground">
+                  {subject.questions.length} questions available
+                </p>
+              </motion.button>
+            ))}
+          </div>
+        </motion.div>
+      ))}
+    </div>
+  );
+});
+
+export default SubjectSelector;
+
+
+--------------------------------------------------------------------------------
+3.2 RichTextEditor Component
+--------------------------------------------------------------------------------
+File: src/features/contribute/components/RichTextEditor.tsx
+--------------------------------------------------------------------------------
+
+import { useEditor, EditorContent } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import Image from '@tiptap/extension-image';
+import { Table } from '@tiptap/extension-table';
+import { TableRow } from '@tiptap/extension-table-row';
+import { TableCell } from '@tiptap/extension-table-cell';
+import { TableHeader } from '@tiptap/extension-table-header';
+import TextAlign from '@tiptap/extension-text-align';
+import { TextStyle } from '@tiptap/extension-text-style';
+import FontFamily from '@tiptap/extension-font-family';
+import Underline from '@tiptap/extension-underline';
+import { Extension } from '@tiptap/core';
+import { mergeAttributes } from '@tiptap/core';
+
+// Create a custom extension for font size
+const FontSize = Extension.create({
+  name: 'fontSize',
+
+  addOptions() {
+    return {
+      types: ['textStyle'],
+    }
+  },
+
+  addGlobalAttributes() {
+    return [
+      {
+        types: this.options.types,
+        attributes: {
+          fontSize: {
+            default: null,
+            parseHTML: element => element.style.fontSize || null,
+            renderHTML: attributes => {
+              if (!attributes.fontSize) {
+                return {}
+              }
+              return {
+                style: `font-size: ${attributes.fontSize}`,
+              }
+            },
+          },
+        },
+      },
+    ]
+  },
+
+  addCommands() {
+    return {
+      setFontSize: (fontSize) => ({ chain }) => {
+        return chain()
+          .setMark('textStyle', { fontSize })
+          .run()
+      },
+      unsetFontSize: () => ({ chain }) => {
+        return chain()
+          .setMark('textStyle', { fontSize: null })
+          .removeEmptyTextStyle()
+          .run()
+      },
+    }
+  },
+});
+
+import { Color } from '@tiptap/extension-color';
+import Highlight from '@tiptap/extension-highlight';
+import CharacterCount from '@tiptap/extension-character-count';
+import './RichTextEditor.css';
+import TableDialog from './TableDialog';
+import { useState, useCallback, memo } from 'react';
+import {
+  Bold,
+  Italic,
+  Strikethrough,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  TableIcon,
+  Image as ImageIcon,
+  Type,
+  Trash2,
+  ChevronDown,
+  ListOrdered,
+  List,
+  Link,
+  Heading1,
+  Heading2,
+} from 'lucide-react';
+
+const FONT_FAMILY_OPTIONS = [
+  { label: 'Arial', value: 'Arial' },
+  { label: 'Times New Roman', value: 'Times New Roman' },
+  { label: 'Courier New', value: 'Courier New' },
+  { label: 'Georgia', value: 'Georgia' },
+  { label: 'Verdana', value: 'Verdana' },
+];
+
+const FONT_SIZE_OPTIONS = [
+  { label: '8px', value: '8px' },
+  { label: '10px', value: '10px' },
+  { label: '12px', value: '12px' },
+  { label: '14px', value: '14px' },
+  { label: '16px', value: '16px' },
+  { label: '18px', value: '18px' },
+  { label: '20px', value: '20px' },
+  { label: '24px', value: '24px' },
+  { label: '28px', value: '28px' },
+  { label: '32px', value: '32px' },
+  { label: '36px', value: '36px' },
+  { label: '48px', value: '48px' },
+];
+
+interface RichTextEditorProps {
+  content: string;
+  onChange: (content: string) => void;
+}
+
+const RichTextEditor = memo(function RichTextEditor({ content, onChange }: RichTextEditorProps) {
+  const [showTableDialog, setShowTableDialog] = useState(false);
+  const [resizingImage, setResizingImage] = useState<HTMLImageElement | null>(null);
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({
+        bulletList: {
+          HTMLAttributes: {
+            class: 'bullet-list',
+          },
+        },
+        orderedList: {
+          HTMLAttributes: {
+            class: 'ordered-list',
+          },
+        },
+        underline: false, // Disable underline in StarterKit
+      }),
+      TextStyle,
+      FontFamily,
+      FontSize,
+      Underline,
+      Color,
+      Highlight.configure({ multicolor: true }),
+      CharacterCount,
+      Image.configure({
+        HTMLAttributes: {
+          class: 'resizable-image',
+        },
+      }),
+      Table.configure({
+        resizable: true,
+        cellMinWidth: 100,
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      TextAlign.configure({
+        types: ['heading', 'paragraph'],
+      }),
+    ],
+    content,
+    onUpdate: ({ editor }) => {
+      onChange(editor.getHTML());
+    },
+    editorProps: {
+      handleDrop: (view, event, slice, moved) => {
+        if (!moved && event.dataTransfer?.files.length) {
+          const images = Array.from(event.dataTransfer.files).filter(file => 
+            file.type.startsWith('image/')
+          );
+          
+          if (images.length) {
+            event.preventDefault();
+            images.forEach(image => {
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
+                if (pos) {
+                  view.dispatch(view.state.tr.insert(pos, editor!.schema.nodes.image.create({
+                    src: e.target?.result,
+                  })));
+                }
+              };
+              reader.readAsDataURL(image);
+            });
+            return true;
+          }
+        }
+        return false;
+      },
+      handlePaste: (view, event) => {
+        const items = event.clipboardData?.items;
+        if (!items) return false;
+
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.indexOf('image') !== -1) {
+            event.preventDefault();
+            const file = items[i].getAsFile();
+            if (file) {
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                const base64 = e.target?.result as string;
+                editor?.chain().focus().setImage({ src: base64 }).run();
+              };
+              reader.readAsDataURL(file);
+            }
+            return true;
+          }
+        }
+        return false;
+      },
+      handleKeyDown: (view, event) => {
+        if (event.key === 'Delete' || event.key === 'Backspace') {
+          const { selection } = view.state;
+          const { empty, from, to } = selection;
+          
+          if (!empty) {
+            const text = view.state.doc.textBetween(from, to);
+            if (text.length === 0) {
+              // Node selection (like images or tables)
+              event.preventDefault();
+              view.dispatch(view.state.tr.delete(from, to));
+              return true;
+            }
+          }
+        }
+        return false;
+      },
+    },
+  });
+
+  const insertTable = useCallback((rows: number, cols: number) => {
+    editor?.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
+    setShowTableDialog(false);
+  }, [editor]);
+
+  if (!editor) {
+    return null;
+  }
+
+  const handleImageResize = (event: React.MouseEvent<HTMLImageElement>) => {
+    const img = event.target as HTMLImageElement;
+    if (!resizingImage) {
+      setResizingImage(img);
+      img.classList.add('selected');
+    } else {
+      setResizingImage(null);
+      img.classList.remove('selected');
+    }
+  };
+
+  return (
+    <div className="rich-text-editor">
+      <div className="editor-toolbar">
+        {/* Font Family */}
+        <div className="toolbar-group">
+          <select
+            className="font-select"
+            value={editor.getAttributes('textStyle').fontFamily || ''}
+            onChange={(e) => {
+              if (e.target.value) {
+                editor.chain().focus().setFontFamily(e.target.value).run();
+              } else {
+                editor.chain().focus().unsetMark('textStyle').run();
+              }
+            }}
+          >
+            <option value="">Default</option>
+            {FONT_FAMILY_OPTIONS.map(font => (
+              <option key={font.value} value={font.value}>{font.label}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Font Size */}
+        <div className="toolbar-group">
+          <select
+            className="font-size-select"
+            value={editor.getAttributes('textStyle').fontSize || ''}
+            onChange={(e) => {
+              const size = e.target.value;
+              if (size) {
+                editor.chain()
+                  .focus()
+                  .setFontSize(size)
+                  .run();
+              } else {
+                editor.chain()
+                  .focus()
+                  .unsetFontSize()
+                  .run();
+              }
+            }}
+          >
+            <option value="">Default</option>
+            {FONT_SIZE_OPTIONS.map(size => (
+              <option key={size.value} value={size.value}>{size.label}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Text Formatting */}
+        <div className="toolbar-group">
+          <button
+            onClick={() => editor.chain().focus().toggleBold().run()}
+            className={`toolbar-button ${editor.isActive('bold') ? 'active' : ''}`}
+          >
+            <Bold className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleItalic().run()}
+            className={`toolbar-button ${editor.isActive('italic') ? 'active' : ''}`}
+          >
+            <Italic className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleUnderline().run()}
+            className={`toolbar-button ${editor.isActive('underline') ? 'active' : ''}`}
+          >
+            <Strikethrough className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Alignment */}
+        <div className="toolbar-group">
+          <button
+            onClick={() => editor.chain().focus().setTextAlign('left').run()}
+            className={`toolbar-button ${editor.isActive({ textAlign: 'left' }) ? 'active' : ''}`}
+          >
+            <AlignLeft className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().setTextAlign('center').run()}
+            className={`toolbar-button ${editor.isActive({ textAlign: 'center' }) ? 'active' : ''}`}
+          >
+            <AlignCenter className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().setTextAlign('right').run()}
+            className={`toolbar-button ${editor.isActive({ textAlign: 'right' }) ? 'active' : ''}`}
+          >
+            <AlignRight className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Lists */}
+        <div className="toolbar-group">
+          <button
+            onClick={() => editor.chain().focus().toggleBulletList().run()}
+            className={`toolbar-button ${editor.isActive('bulletList') ? 'active' : ''}`}
+          >
+            <List className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleOrderedList().run()}
+            className={`toolbar-button ${editor.isActive('orderedList') ? 'active' : ''}`}
+          >
+            <ListOrdered className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Table & Image */}
+        <div className="toolbar-group">
+          <button
+            onClick={() => setShowTableDialog(true)}
+            className="toolbar-button"
+            title="Insert Table"
+          >
+            <TableIcon className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => {
+              const url = window.prompt('Enter image URL:');
+              if (url) {
+                editor.chain().focus().setImage({ src: url }).run();
+              }
+            }}
+            className="toolbar-button"
+          >
+            <ImageIcon className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Editor Content */}
+      <div className="editor-content">
+        <EditorContent editor={editor} />
+      </div>
+
+      {/* Table Dialog */}
+      {showTableDialog && (
+        <TableDialog
+          onInsert={insertTable}
+          onClose={() => setShowTableDialog(false)}
+        />
+      )}
+    </div>
+  );
+});
+
+export default RichTextEditor;
+
+
+--------------------------------------------------------------------------------
+3.3 RichTextEditor CSS Styles
+--------------------------------------------------------------------------------
+File: src/features/contribute/components/RichTextEditor.css
+--------------------------------------------------------------------------------
+
+.rich-text-editor {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.editor-content {
+  min-height: 300px;
+  resize: vertical;
+  overflow: auto;
+}
+
+.ProseMirror {
+  padding: 1rem;
+  min-height: 300px;
+  outline: none;
+}
+
+.ProseMirror:focus {
+  outline: none;
+}
+
+.ProseMirror .editor-text {
+  display: inline;
+}
+
+.font-size-select {
+  min-width: 80px;
+}
+
+/* Font Size Styles */
+.ProseMirror [style*="font-size"] {
+  line-height: 1.4;
+}
+
+.ProseMirror .is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #adb5bd;
+  pointer-events: none;
+  height: 0;
+}
+
+.font-size-select {
+  min-width: 80px;
+}
+
+/* Table Styles */
+.ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 1rem 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.ProseMirror td,
+.ProseMirror th {
+  border: 2px solid #000000;
+  padding: 0.5rem;
+  position: relative;
+  min-width: 100px;
+  vertical-align: top;
+}
+
+.ProseMirror th {
+  background-color: #f8fafc;
+  font-weight: bold;
+  border-bottom: 3px solid #000000;
+}
+
+/* Table Resize Handle */
+.resize-handle {
+  position: absolute;
+  right: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 20;
+  background-color: transparent;
+}
+
+.resize-handle:hover {
+  background-color: #4f46e5;
+  opacity: 0.1;
+}
+
+/* Image Styles */
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1rem 0;
+  cursor: pointer;
+  position: relative;
+}
+
+.ProseMirror img.selected {
+  outline: 2px solid #4f46e5;
+}
+
+.image-resizer {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+}
+
+.image-resizer .resize-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background-color: #4f46e5;
+  border-radius: 50%;
+}
+
+.image-resizer .resize-handle.top-left { top: -5px; left: -5px; cursor: nw-resize; }
+.image-resizer .resize-handle.top-right { top: -5px; right: -5px; cursor: ne-resize; }
+.image-resizer .resize-handle.bottom-left { bottom: -5px; left: -5px; cursor: sw-resize; }
+.image-resizer .resize-handle.bottom-right { bottom: -5px; right: -5px; cursor: se-resize; }
+
+/* Toolbar Styles */
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid #e2e8f0;
+  background-color: #f8fafc;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.5rem;
+  border-right: 1px solid #e2e8f0;
+}
+
+.toolbar-group:last-child {
+  border-right: none;
+}
+
+.toolbar-button {
+  padding: 0.25rem;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  height: 2rem;
+}
+
+.toolbar-button:hover {
+  background-color: #e2e8f0;
+}
+
+.toolbar-button.active {
+  background-color: #4f46e5;
+  color: white;
+}
+
+/* Font Selection */
+.font-select,
+.font-size-select {
+  padding: 0.25rem;
+  border-radius: 0.25rem;
+  border: 1px solid #e2e8f0;
+  min-width: 120px;
+}
+
+/* Selected State */
+.ProseMirror .selected-node {
+  outline: 2px solid #4f46e5;
+}
+
+/* List Styles */
+.ProseMirror ul,
+.ProseMirror ol {
+  padding-left: 2rem;
+  margin: 0.5rem 0;
+}
+
+.ProseMirror ul li {
+  list-style-type: disc;
+  margin: 0.3rem 0;
+}
+
+.ProseMirror ol li {
+  list-style-type: decimal;
+  margin: 0.3rem 0;
+}
+
+.ProseMirror ul li p,
+.ProseMirror ol li p {
+  margin: 0;
+}
+
+/* Nested List Styles */
+.ProseMirror ul ul li {
+  list-style-type: circle;
+}
+
+.ProseMirror ul ul ul li {
+  list-style-type: square;
+}
+
+.ProseMirror ol ol li {
+  list-style-type: lower-alpha;
+}
+
+.ProseMirror ol ol ol li {
+  list-style-type: lower-roman;
+}
+
+
+--------------------------------------------------------------------------------
+3.4 TableDialog Component
+--------------------------------------------------------------------------------
+File: src/features/contribute/components/TableDialog.tsx
+--------------------------------------------------------------------------------
+
+import React, { useState, memo } from 'react';
+
+interface TableDialogProps {
+  onInsert: (rows: number, cols: number) => void;
+  onClose: () => void;
+}
+
+const TableDialog = memo(function TableDialog({ onInsert, onClose }: TableDialogProps) {
+  const [rows, setRows] = useState(3);
+  const [cols, setCols] = useState(3);
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-background p-3 sm:p-4 rounded-lg shadow-xl w-full max-w-xs sm:max-w-sm">
+        <h2 className="text-base sm:text-lg font-semibold mb-3">Insert Table</h2>
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <label className="min-w-[60px] sm:min-w-[70px] text-sm sm:text-base">Rows:</label>
+            <input
+              type="number"
+              min="1"
+              max="20"
+              value={rows}
+              onChange={(e) => setRows(Math.max(1, parseInt(e.target.value) || 1))}
+              className="glass-input px-2 py-1.5 text-sm sm:text-base w-20"
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="min-w-[60px] sm:min-w-[70px] text-sm sm:text-base">Columns:</label>
+            <input
+              type="number"
+              min="1"
+              max="10"
+              value={cols}
+              onChange={(e) => setCols(Math.max(1, parseInt(e.target.value) || 1))}
+              className="glass-input px-2 py-1.5 text-sm sm:text-base w-20"
+            />
+          </div>
+          <div className="flex justify-end gap-2 mt-4 sm:mt-5">
+            <button onClick={onClose} className="glass-button px-3 py-1.5 sm:px-4 sm:py-2 text-sm">
+              Cancel
+            </button>
+            <button
+              onClick={() => onInsert(rows, cols)}
+              className="glass-button px-3 py-1.5 sm:px-4 sm:py-2 bg-primary/10 text-primary text-sm"
+            >
+              Insert
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+export default TableDialog;
+
+
+--------------------------------------------------------------------------------
+3.5 AlertDialog Component
+--------------------------------------------------------------------------------
+File: src/shared/ui/alert-dialog.tsx
+--------------------------------------------------------------------------------
+
+import * as React from "react"
+import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
+
+import { cn } from "@/shared/lib/utils"
+import { buttonVariants } from "@/shared/ui/button"
+
+const AlertDialog = AlertDialogPrimitive.Root
+
+const AlertDialogTrigger = AlertDialogPrimitive.Trigger
+
+const AlertDialogPortal = AlertDialogPrimitive.Portal
+
+const AlertDialogOverlay = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Overlay>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Overlay>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPrimitive.Overlay
+    className={cn(
+      "fixed inset-0 z-50 bg-black/80  data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      className
+    )}
+    {...props}
+    ref={ref}
+  />
+))
+AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName
+
+const AlertDialogContent = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPortal>
+    <AlertDialogOverlay />
+    <AlertDialogPrimitive.Content
+      ref={ref}
+      className={cn(
+        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
+        className
+      )}
+      {...props}
+    />
+  </AlertDialogPortal>
+))
+AlertDialogContent.displayName = AlertDialogPrimitive.Content.displayName
+
+const AlertDialogHeader = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => (
+  <div
+    className={cn(
+      "flex flex-col space-y-2 text-center sm:text-left",
+      className
+    )}
+    {...props}
+  />
+)
+AlertDialogHeader.displayName = "AlertDialogHeader"
+
+const AlertDialogFooter = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => (
+  <div
+    className={cn(
+      "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2",
+      className
+    )}
+    {...props}
+  />
+)
+AlertDialogFooter.displayName = "AlertDialogFooter"
+
+const AlertDialogTitle = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Title>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Title>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPrimitive.Title
+    ref={ref}
+    className={cn("text-lg font-semibold", className)}
+    {...props}
+  />
+))
+AlertDialogTitle.displayName = AlertDialogPrimitive.Title.displayName
+
+const AlertDialogDescription = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Description>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Description>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPrimitive.Description
+    ref={ref}
+    className={cn("text-sm text-muted-foreground", className)}
+    {...props}
+  />
+))
+AlertDialogDescription.displayName =
+  AlertDialogPrimitive.Description.displayName
+
+const AlertDialogAction = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Action>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPrimitive.Action
+    ref={ref}
+    className={cn(buttonVariants(), className)}
+    {...props}
+  />
+))
+AlertDialogAction.displayName = AlertDialogPrimitive.Action.displayName
+
+const AlertDialogCancel = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Cancel>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Cancel>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPrimitive.Cancel
+    ref={ref}
+    className={cn(
+      buttonVariants({ variant: "outline" }),
+      "mt-2 sm:mt-0",
+      className
+    )}
+    {...props}
+  />
+))
+AlertDialogCancel.displayName = AlertDialogPrimitive.Cancel.displayName
+
+export {
+  AlertDialog,
+  AlertDialogPortal,
+  AlertDialogOverlay,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+}
+
+
+================================================================================
+4. DATABASE SCHEMA (Supabase Migration)
+================================================================================
+File: supabase/migrations/20251026112323_4920fe05-6560-4cda-bbf9-f98dea9100d9.sql
+--------------------------------------------------------------------------------
+
+-- Create storage buckets for files
+INSERT INTO storage.buckets (id, name, public) VALUES ('contributions', 'contributions', false);
+INSERT INTO storage.buckets (id, name, public) VALUES ('syllabus', 'syllabus', true);
+INSERT INTO storage.buckets (id, name, public) VALUES ('exam-images', 'exam-images', true);
+
+-- Create contributions table
+CREATE TABLE public.contributions (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  roll_number TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  description TEXT NOT NULL,
+  file_id TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  file_type TEXT NOT NULL,
+  approved BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+-- Create syllabus_files table
+CREATE TABLE public.syllabus_files (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  subject TEXT NOT NULL,
+  semester TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+-- Create exam_attempts table to store user practice attempts
+CREATE TABLE public.exam_attempts (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  questions JSONB NOT NULL,
+  answers JSONB NOT NULL DEFAULT '{}',
+  started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  last_saved_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  time_elapsed INTEGER NOT NULL DEFAULT 0,
+  completed BOOLEAN NOT NULL DEFAULT false
+);
+
+-- Enable RLS on all tables
+ALTER TABLE public.contributions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.syllabus_files ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exam_attempts ENABLE ROW LEVEL SECURITY;
+
+-- RLS policies for contributions (public can insert, only approved can be viewed)
+CREATE POLICY "Anyone can submit contributions"
+  ON public.contributions
+  FOR INSERT
+  WITH CHECK (true);
+
+CREATE POLICY "Anyone can view approved contributions"
+  ON public.contributions
+  FOR SELECT
+  USING (approved = true);
+
+-- RLS policies for syllabus_files (anyone can view)
+CREATE POLICY "Anyone can view syllabus files"
+  ON public.syllabus_files
+  FOR SELECT
+  USING (true);
+
+-- RLS policies for exam_attempts (users can manage their own attempts)
+CREATE POLICY "Users can insert their own attempts"
+  ON public.exam_attempts
+  FOR INSERT
+  WITH CHECK (true);
+
+CREATE POLICY "Users can view their own attempts"
+  ON public.exam_attempts
+  FOR SELECT
+  USING (true);
+
+CREATE POLICY "Users can update their own attempts"
+  ON public.exam_attempts
+  FOR UPDATE
+  USING (true);
+
+-- Storage policies for contributions bucket (anyone can upload, restricted download)
+CREATE POLICY "Anyone can upload contributions"
+  ON storage.objects
+  FOR INSERT
+  WITH CHECK (bucket_id = 'contributions');
+
+CREATE POLICY "Approved contributions can be downloaded"
+  ON storage.objects
+  FOR SELECT
+  USING (bucket_id = 'contributions');
+
+-- Storage policies for syllabus bucket (public read)
+CREATE POLICY "Anyone can view syllabus files"
+  ON storage.objects
+  FOR SELECT
+  USING (bucket_id = 'syllabus');
+
+-- Storage policies for exam-images bucket (public read/write)
+CREATE POLICY "Anyone can upload exam images"
+  ON storage.objects
+  FOR INSERT
+  WITH CHECK (bucket_id = 'exam-images');
+
+CREATE POLICY "Anyone can view exam images"
+  ON storage.objects
+  FOR SELECT
+  USING (bucket_id = 'exam-images');
+
+-- Create function to update updated_at timestamp
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = public;
+
+-- Create trigger for contributions table
+CREATE TRIGGER update_contributions_updated_at
+  BEFORE UPDATE ON public.contributions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.update_updated_at_column();
+
+
+-- Trigger to automatically create profile on user signup
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  INSERT INTO public.profiles (id, full_name)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'full_name', '')
+  );
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+
+================================================================================
+5. DATABASE TYPES (TypeScript)
+================================================================================
+File: src/services/supabase/types.ts (exam_attempts section)
+--------------------------------------------------------------------------------
+
+// ... other types ...
+
+exam_attempts: {
+  Row: {
+    answers: Json
+    completed: boolean
+    id: string
+    last_saved_at: string
+    questions: Json
+    session_id: string
+    started_at: string
+    time_elapsed: number
+  }
+  Insert: {
+    answers?: Json
+    completed?: boolean
+    id?: string
+    last_saved_at?: string
+    questions: Json
+    session_id: string
+    started_at?: string
+    time_elapsed?: number
+  }
+  Update: {
+    answers?: Json
+    completed?: boolean
+    id?: string
+    last_saved_at?: string
+    questions?: Json
+    session_id?: string
+    started_at?: string
+    time_elapsed?: number
+  }
+  Relationships: []
+}
+
+
+================================================================================
+6. ACTIVITY TRACKER HOOK (Exam-related parts)
+================================================================================
+File: src/features/auth/hooks/use-activity-tracker.ts (relevant sections)
+--------------------------------------------------------------------------------
+
+// Activity types include exam-related tracking
+export type ActivityType = 'page_view' | 'download' | 'search' | 'contribution' | 'exam_attempt' | 'other' | 'eduword_step_change'
+  | 'eduword_generate_started'
+  | 'eduword_generate_success'
+  | 'eduword_generate_failed'
+  | 'eduword_project_generate_started'
+  | 'eduword_project_generate_success'
+  | 'eduword_project_generate_failed'
+  | 'eduword_feedback'
+  | 'contribute_notes'
+  | 'exam_practice_start'
+  | 'room_view'
+  | 'blueprint_view';
+
+// ... existing code ...
+
+// Track exam attempts
+const trackExamAttempt = useCallback(async (
+  attemptId: string,
+  additionalDetails?: Record<string, any>
+) => {
+  await trackActivity({
+    activity_type: 'exam_attempt',
+    activity_details: {
+      attempt_id: attemptId,
+      ...additionalDetails,
+      timestamp: new Date().toISOString(),
+    },
+  });
+}, [trackActivity]);
+
+// ... returns trackExamAttempt function ...
+
+return {
+  trackDownload,
+  trackSearch,
+  trackContribution,
+  trackExamAttempt,
+  trackCustom,
+  trackActivity,
+  setTrackingEnabled,
+};
+
+
+================================================================================
+7. APP ROUTER CONFIGURATION
+================================================================================
+File: src/App.tsx (exam-practice route)
+--------------------------------------------------------------------------------
+
+// Lazy load exam practice page
+const ExamPractice = lazy(() => import("./features/exam-practice/components/ExamPracticePage"));
+
+// ... in Routes ...
+<Route
+  path="/exam-practice"
+  element={
+    <PrivateRoute>
+      <ExamPractice />
+    </PrivateRoute>
+  }
+/>
+
+
+================================================================================
+8. HOME PAGE REFERENCE (Feature Card)
+================================================================================
+File: src/features/home/components/HomePage.tsx (relevant section)
+--------------------------------------------------------------------------------
+
+// Feature card definition for EduExam
+{
+  to: "/exam-practice",
+  icon: BookOpen,
+  title: "EduExam",
+  description: "Worried about end semester exams? Don't be. Prepare here with GRMS atmosphere.",
+},
+
+
+================================================================================
+DEPENDENCIES REQUIRED FOR EDUEXAM
+================================================================================
+
+NPM Packages:
+- react
+- react-dom
+- react-router-dom
+- framer-motion
+- lucide-react
+- @tiptap/react
+- @tiptap/starter-kit
+- @tiptap/extension-image
+- @tiptap/extension-table
+- @tiptap/extension-table-row
+- @tiptap/extension-table-cell
+- @tiptap/extension-table-header
+- @tiptap/extension-text-align
+- @tiptap/extension-text-style
+- @tiptap/extension-font-family
+- @tiptap/extension-underline
+- @tiptap/extension-color
+- @tiptap/extension-highlight
+- @tiptap/extension-character-count
+- @radix-ui/react-alert-dialog
+- @supabase/supabase-js (if using database features)
+
+================================================================================
+END OF EDUEXAM CODE COLLECTION
+================================================================================
